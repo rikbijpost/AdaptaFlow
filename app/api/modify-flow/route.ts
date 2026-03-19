@@ -10,6 +10,7 @@ const anthropic = new Anthropic({
 type FileContent =
   | { type: 'text'; text: string }
   | { type: 'image'; base64: string; mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }
+  | { type: 'document'; base64: string; mediaType: 'application/pdf' }
 
 async function extractContent(file: File): Promise<FileContent> {
   const buffer = Buffer.from(await file.arrayBuffer())
@@ -25,10 +26,11 @@ async function extractContent(file: File): Promise<FileContent> {
   }
 
   if (name.endsWith('.pdf')) {
-    const { PDFParse } = await import('pdf-parse')
-    const parser = new PDFParse({ data: buffer })
-    const result = await parser.getText()
-    return { type: 'text', text: result.text }
+    return {
+      type: 'document',
+      base64: buffer.toString('base64'),
+      mediaType: 'application/pdf',
+    }
   }
 
   if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
@@ -157,23 +159,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'The uploaded file appears to be empty.' }, { status: 400 })
     }
 
-    const messageContent: Anthropic.MessageParam['content'] =
-      content.type === 'image'
-        ? [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: content.mediaType,
-                data: content.base64,
-              },
-            },
-            {
-              type: 'text',
-              text: buildImagePrompt(modificationType, details),
-            },
-          ]
-        : buildTextPrompt(content.text, modificationType, details)
+    let messageContent: Anthropic.MessageParam['content']
+    if (content.type === 'document') {
+      messageContent = [
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: content.mediaType,
+            data: content.base64,
+          },
+        },
+        {
+          type: 'text',
+          text: buildImagePrompt(modificationType, details),
+        },
+      ]
+    } else if (content.type === 'image') {
+      messageContent = [
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: content.mediaType,
+            data: content.base64,
+          },
+        },
+        {
+          type: 'text',
+          text: buildImagePrompt(modificationType, details),
+        },
+      ]
+    } else {
+      messageContent = buildTextPrompt(content.text, modificationType, details)
+    }
 
     const message = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
